@@ -1,0 +1,7 @@
+node_modules/
+.env
+dist/
+*.log
+backend/scripts/*cookies.txt
+cookies.txt
+rescookies.txt
