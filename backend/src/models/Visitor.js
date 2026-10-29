@@ -1,4 +1,4 @@
-import mongoose from "mongoose";
+﻿import mongoose from "mongoose";
 
 const visitorSchema = new mongoose.Schema(
   {
@@ -15,8 +15,21 @@ const visitorSchema = new mongoose.Schema(
       ref: "House",
       required: [true, "House is required"],
     },
-    entryAt: { type: Date, default: Date.now },
+    phone: { type: String, trim: true, maxlength: 20 },
+    vehicleNumber: { type: String, trim: true, maxlength: 30 },
+    entryAt: { type: Date },
     exitAt: { type: Date },
+    expectedArrival: { type: Date },
+    status: {
+      type: String,
+      enum: ["Pre-Registered", "Inside", "Exited"],
+      default: "Inside",
+    },
+    isPreRegistered: { type: Boolean, default: false },
+    preRegisteredBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
     recordedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -28,6 +41,7 @@ const visitorSchema = new mongoose.Schema(
 
 visitorSchema.index({ house: 1, entryAt: -1 });
 visitorSchema.index({ entryAt: -1 });
+visitorSchema.index({ status: 1, expectedArrival: -1 });
 
 const Visitor = mongoose.model("Visitor", visitorSchema);
 

@@ -1,4 +1,4 @@
-import mongoose from "mongoose";
+﻿import mongoose from "mongoose";
 
 const notificationSchema = new mongoose.Schema(
   {
@@ -9,13 +9,13 @@ const notificationSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ["complaint", "payment", "notice", "account", "general"],
+      enum: ["complaint", "payment", "notice", "account", "general", "utility-bill", "visitor"],
       default: "general",
     },
     title: { type: String, required: true, trim: true, maxlength: 120 },
     message: { type: String, required: true, trim: true, maxlength: 500 },
     relatedResource: {
-      kind: { type: String, enum: ["complaint", "payment", "notice"] },
+      kind: { type: String, enum: ["complaint", "payment", "notice", "utility-bill", "visitor"] },
       id: { type: mongoose.Schema.Types.ObjectId },
     },
     isRead: { type: Boolean, default: false },

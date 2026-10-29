@@ -1,4 +1,12 @@
-import mongoose from "mongoose";
+﻿import mongoose from "mongoose";
+
+const acknowledgmentSchema = new mongoose.Schema(
+  {
+    resident: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    acknowledgedAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
 
 const noticeSchema = new mongoose.Schema(
   {
@@ -28,6 +36,7 @@ const noticeSchema = new mongoose.Schema(
     },
     publishedAt: { type: Date, default: Date.now },
     isArchived: { type: Boolean, default: false },
+    acknowledgedBy: [acknowledgmentSchema],
   },
   { timestamps: true }
 );

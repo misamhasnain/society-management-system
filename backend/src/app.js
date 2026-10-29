@@ -1,4 +1,4 @@
-import express from "express";
+﻿import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import authRoutes from "./routes/authRoutes.js";
@@ -7,9 +7,12 @@ import residentRoutes from "./routes/residentRoutes.js";
 import complaintRoutes from "./routes/complaintRoutes.js";
 import paymentRoutes from "./routes/paymentRoutes.js";
 import noticeRoutes from "./routes/noticeRoutes.js";
-import { notFound, errorHandler } from "./middleware/errorMiddleware.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
 import visitorRoutes from "./routes/visitorRoutes.js";
+import utilityBillRoutes from "./routes/utilityBillRoutes.js";
+import aiRoutes from "./routes/aiRoutes.js";
+import reportRoutes from "./routes/reportRoutes.js";
+import { notFound, errorHandler } from "./middleware/errorMiddleware.js";
 
 const app = express();
 
@@ -39,10 +42,12 @@ app.use("/api/houses", houseRoutes);
 app.use("/api/residents", residentRoutes);
 app.use("/api/complaints", complaintRoutes);
 app.use("/api/payments", paymentRoutes);
+app.use("/api/utility-bills", utilityBillRoutes);
 app.use("/api/notices", noticeRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/visitors", visitorRoutes);
-
+app.use("/api/ai", aiRoutes);
+app.use("/api/reports", reportRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

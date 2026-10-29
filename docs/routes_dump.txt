@@ -1,0 +1,83 @@
+﻿=== aiRoutes.js ===
+import { protect } from "../middleware/authMiddleware.js";
+router.use(protect);
+router.post("/chat", chat);
+router.post("/analyze-complaint", analyzeComplaint);
+=== authRoutes.js ===
+import { protect } from "../middleware/authMiddleware.js";
+import { loginLimiter, registerLimiter } from "../middleware/rateLimiter.js";
+router.post("/register", registerLimiter, register);
+router.post("/login", loginLimiter, login);
+router.post("/logout", logout);
+router.get("/me", protect, getMe);
+=== complaintRoutes.js ===
+import { protect, authorize } from "../middleware/authMiddleware.js";
+router.use(protect);
+router.post("/", createComplaint);
+router.get("/", getComplaints);
+router.get("/:id", getComplaintById);
+router.patch("/:id/status", authorize("admin"), updateComplaintStatus);
+router.patch("/:id/assignment", authorize("admin"), assignComplaint);
+=== houseRoutes.js ===
+import { protect, authorize } from "../middleware/authMiddleware.js";
+router.get("/available", getAvailableHouses);
+router.use(protect, authorize("admin"));
+router.get("/", getHouses);
+router.post("/", createHouse);
+router.get("/:id", getHouseById);
+router.patch("/:id", updateHouse);
+=== noticeRoutes.js ===
+import { protect, authorize } from "../middleware/authMiddleware.js";
+router.use(protect);
+router.get("/", getNotices);
+router.post("/", authorize("admin"), createNotice);
+router.get("/:id", getNoticeById);
+router.patch("/:id/acknowledge", acknowledgeNotice);
+router.patch("/:id", authorize("admin"), updateNotice);
+router.patch("/:id/archive", authorize("admin"), archiveNotice);
+=== notificationRoutes.js ===
+import { protect } from "../middleware/authMiddleware.js";
+router.use(protect);
+router.get("/", getMyNotifications);
+router.get("/unread-count", getUnreadCount);
+router.patch("/read-all", markAllAsRead);
+router.patch("/:id/read", markAsRead);
+=== paymentRoutes.js ===
+import { protect, authorize } from "../middleware/authMiddleware.js";
+router.use(protect);
+router.get("/", getPayments);
+router.post("/", authorize("admin"), createPayment);
+router.post("/bulk", authorize("admin"), createBulkPayments);
+router.get("/:id", getPaymentById);
+router.patch("/:id/request-pay", submitPaymentRequest);
+router.patch("/:id/status", authorize("admin"), updatePaymentStatus);
+router.post("/:id/remind", authorize("admin"), sendDueReminder);
+=== reportRoutes.js ===
+import { protect, authorize } from "../middleware/authMiddleware.js";
+router.use(protect, authorize("admin"));
+router.get("/dashboard", getDashboardStats);
+router.get("/residents", getResidentReport);
+=== residentRoutes.js ===
+import { protect, authorize } from "../middleware/authMiddleware.js";
+router.use(protect, authorize("admin"));
+router.get("/", getResidents);
+router.get("/:id", getResidentById);
+router.patch("/:id/approval", updateApproval);
+router.patch("/:id/status", updateStatus);
+=== utilityBillRoutes.js ===
+import { protect, authorize } from "../middleware/authMiddleware.js";
+import { uploadBill } from "../middleware/uploadMiddleware.js";
+router.use(protect);
+router.post("/upload", uploadBill.single("file"), uploadUtilityBill);
+router.get("/", getUtilityBills);
+router.get("/status", getVerificationStatus);
+router.get("/:id/file", getBillFile);
+router.patch("/:id/review", authorize("admin"), reviewUtilityBill);
+=== visitorRoutes.js ===
+import { protect, authorize } from "../middleware/authMiddleware.js";
+router.use(protect);
+router.post("/", authorize("admin"), createVisitor);
+router.post("/pre-register", preRegisterVisitor);
+router.get("/", getVisitors);
+router.patch("/:id/check-in", authorize("admin"), checkInVisitor);
+router.patch("/:id/exit", authorize("admin"), markExit);

@@ -1,4 +1,4 @@
-import mongoose from "mongoose";
+﻿import mongoose from "mongoose";
 
 const paymentSchema = new mongoose.Schema(
   {
@@ -37,11 +37,13 @@ const paymentSchema = new mongoose.Schema(
     },
     markedPaidAt: { type: Date },
     markedPaidBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    paymentNote: { type: String, trim: true, maxlength: 300 },
+    paymentRequestSubmitted: { type: Boolean, default: false },
+    paymentRequestedAt: { type: Date },
   },
   { timestamps: true }
 );
 
-// Ek resident ka ek period ka ek hi bill (duplicate bills se bachao)
 paymentSchema.index(
   { resident: 1, paymentPeriod: 1, description: 1 },
   { unique: true }

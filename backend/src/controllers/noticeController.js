@@ -1,4 +1,4 @@
-import mongoose from "mongoose";
+﻿import mongoose from "mongoose";
 import Notice from "../models/Notice.js";
 import User from "../models/User.js";
 import Notification from "../models/Notification.js";
@@ -16,20 +16,29 @@ export const getNotices = async (req, res) => {
   const limit = Math.min(Math.max(parseInt(req.query.limit) || 10, 1), 100);
 
   const filter = {};
-  // Residents never see archived notices
   if (!(req.user.role === "admin" && req.query.archived === "true")) {
     filter.isArchived = false;
   }
   if (PRIORITIES.includes(req.query.priority)) filter.priority = req.query.priority;
 
-  const [notices, total] = await Promise.all([
+  const [rawNotices, total] = await Promise.all([
     Notice.find(filter)
       .populate("createdBy", "name")
+      .populate("acknowledgedBy.resident", "name")
       .sort({ publishedAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit),
     Notice.countDocuments(filter),
   ]);
+
+  const notices = rawNotices.map((n) => {
+    const doc = n.toObject();
+    doc.isAcknowledged = (n.acknowledgedBy || []).some(
+      (a) => String(a.resident?._id || a.resident) === String(req.user._id)
+    );
+    doc.acknowledgmentsCount = (n.acknowledgedBy || []).length;
+    return doc;
+  });
 
   return ok(res, 200, "Notices fetched.", {
     notices,
@@ -44,9 +53,46 @@ export const getNoticeById = async (req, res) => {
   const filter = { _id: req.params.id };
   if (req.user.role !== "admin") filter.isArchived = false;
 
-  const notice = await Notice.findOne(filter).populate("createdBy", "name");
-  if (!notice) return fail(res, 404, "Notice not found.");
+  const rawNotice = await Notice.findOne(filter)
+    .populate("createdBy", "name")
+    .populate("acknowledgedBy.resident", "name");
+  if (!rawNotice) return fail(res, 404, "Notice not found.");
+
+  const notice = rawNotice.toObject();
+  notice.isAcknowledged = (rawNotice.acknowledgedBy || []).some(
+    (a) => String(a.resident?._id || a.resident) === String(req.user._id)
+  );
+  notice.acknowledgmentsCount = (rawNotice.acknowledgedBy || []).length;
+
   return ok(res, 200, "Notice fetched.", { notice });
+};
+
+export const acknowledgeNotice = async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.id)) {
+    return fail(res, 400, "Invalid notice ID.");
+  }
+
+  const notice = await Notice.findById(req.params.id);
+  if (!notice || notice.isArchived) {
+    return fail(res, 404, "Active notice not found.");
+  }
+
+  const already = (notice.acknowledgedBy || []).some(
+    (a) => String(a.resident) === String(req.user._id)
+  );
+
+  if (!already) {
+    notice.acknowledgedBy.push({
+      resident: req.user._id,
+      acknowledgedAt: new Date(),
+    });
+    await notice.save();
+  }
+
+  return ok(res, 200, "Notice acknowledged successfully.", {
+    isAcknowledged: true,
+    acknowledgmentsCount: notice.acknowledgedBy.length,
+  });
 };
 
 export const createNotice = async (req, res) => {
@@ -62,7 +108,7 @@ export const createNotice = async (req, res) => {
     title: String(title).trim(),
     content: String(content).trim(),
     priority: priority || "Normal",
-    createdBy: req.user._id, // never from req.body
+    createdBy: req.user._id,
   });
 
   const residents = await User.find({
@@ -76,7 +122,7 @@ export const createNotice = async (req, res) => {
       residents.map((r) => ({
         recipient: r._id,
         type: "notice",
-        title: "New notice",
+        title: "New society circular posted",
         message: notice.title.slice(0, 120),
         relatedResource: { kind: "notice", id: notice._id },
       }))

@@ -1,0 +1,446 @@
+﻿=== Complaint.js ===
+import mongoose from "mongoose";
+
+const statusHistorySchema = new mongoose.Schema(
+  {
+    status: {
+      type: String,
+      enum: ["Pending", "In Progress", "Resolved", "Rejected"],
+      required: true,
+    },
+    changedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    note: { type: String, trim: true, maxlength: 500 },
+    changedAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
+const complaintSchema = new mongoose.Schema(
+  {
+    resident: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+      index: true,
+    },
+    title: {
+      type: String,
+      required: [true, "Title is required"],
+      trim: true,
+      minlength: 5,
+      maxlength: 120,
+    },
+    description: {
+      type: String,
+      required: [true, "Description is required"],
+      trim: true,
+      minlength: 10,
+      maxlength: 2000,
+    },
+    category: {
+      type: String,
+      enum: ["Water", "Electricity", "Sanitation", "Security", "Other"],
+      default: "Other",
+    },
+    priority: {
+      type: String,
+      enum: ["Low", "Medium", "High"],
+      default: "Medium",
+    },
+    status: {
+      type: String,
+      enum: ["Pending", "In Progress", "Resolved", "Rejected"],
+      default: "Pending",
+    },
+    // Admin account jisko complaint assign hui
+    assignedTo: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+    statusHistory: [statusHistorySchema],
+  },
+  { timestamps: true }
+);
+
+complaintSchema.index({ status: 1, priority: 1 });
+complaintSchema.index({ createdAt: -1 });
+
+const Complaint = mongoose.model("Complaint", complaintSchema);
+
+export default Complaint;
+=== House.js ===
+import mongoose from "mongoose";
+
+const houseSchema = new mongoose.Schema(
+  {
+    houseNumber: {
+      type: String,
+      required: [true, "House number is required"],
+      trim: true,
+      maxlength: 20,
+    },
+    block: {
+      type: String,
+      required: [true, "Block is required"],
+      trim: true,
+      uppercase: true,
+      maxlength: 20,
+    },
+    address: {
+      type: String,
+      trim: true,
+      maxlength: 200,
+    },
+    occupancyStatus: {
+      type: String,
+      enum: ["Vacant", "Occupied"],
+      default: "Vacant",
+    },
+  },
+  { timestamps: true }
+);
+
+// Ek block mein ek house number sirf ek baar ho sakta hai
+houseSchema.index({ block: 1, houseNumber: 1 }, { unique: true });
+
+const House = mongoose.model("House", houseSchema);
+
+export default House;
+=== Notice.js ===
+import mongoose from "mongoose";
+
+const acknowledgmentSchema = new mongoose.Schema(
+  {
+    resident: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    acknowledgedAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
+const noticeSchema = new mongoose.Schema(
+  {
+    title: {
+      type: String,
+      required: [true, "Title is required"],
+      trim: true,
+      minlength: 3,
+      maxlength: 150,
+    },
+    content: {
+      type: String,
+      required: [true, "Content is required"],
+      trim: true,
+      minlength: 5,
+      maxlength: 3000,
+    },
+    priority: {
+      type: String,
+      enum: ["Normal", "Important", "Urgent"],
+      default: "Normal",
+    },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+    publishedAt: { type: Date, default: Date.now },
+    isArchived: { type: Boolean, default: false },
+    acknowledgedBy: [acknowledgmentSchema],
+  },
+  { timestamps: true }
+);
+
+noticeSchema.index({ isArchived: 1, publishedAt: -1 });
+
+const Notice = mongoose.model("Notice", noticeSchema);
+
+export default Notice;
+=== Notification.js ===
+import mongoose from "mongoose";
+
+const notificationSchema = new mongoose.Schema(
+  {
+    recipient: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+    type: {
+      type: String,
+      enum: ["complaint", "payment", "notice", "account", "general", "utility-bill", "visitor"],
+      default: "general",
+    },
+    title: { type: String, required: true, trim: true, maxlength: 120 },
+    message: { type: String, required: true, trim: true, maxlength: 500 },
+    relatedResource: {
+      kind: { type: String, enum: ["complaint", "payment", "notice", "utility-bill", "visitor"] },
+      id: { type: mongoose.Schema.Types.ObjectId },
+    },
+    isRead: { type: Boolean, default: false },
+  },
+  { timestamps: true }
+);
+
+notificationSchema.index({ recipient: 1, isRead: 1, createdAt: -1 });
+
+const Notification = mongoose.model("Notification", notificationSchema);
+
+export default Notification;
+=== Payment.js ===
+import mongoose from "mongoose";
+
+const paymentSchema = new mongoose.Schema(
+  {
+    resident: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+      index: true,
+    },
+    amount: {
+      type: Number,
+      required: [true, "Amount is required"],
+      min: [1, "Amount must be greater than 0"],
+    },
+    description: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 200,
+      default: "Monthly maintenance",
+    },
+    // Format: YYYY-MM, e.g. 2026-10
+    paymentPeriod: {
+      type: String,
+      required: [true, "Payment period is required"],
+      match: [/^\d{4}-(0[1-9]|1[0-2])$/, "Period must be in YYYY-MM format"],
+    },
+    dueDate: {
+      type: Date,
+      required: [true, "Due date is required"],
+    },
+    status: {
+      type: String,
+      enum: ["Paid", "Unpaid"],
+      default: "Unpaid",
+    },
+    markedPaidAt: { type: Date },
+    markedPaidBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    paymentNote: { type: String, trim: true, maxlength: 300 },
+    paymentRequestSubmitted: { type: Boolean, default: false },
+    paymentRequestedAt: { type: Date },
+  },
+  { timestamps: true }
+);
+
+paymentSchema.index(
+  { resident: 1, paymentPeriod: 1, description: 1 },
+  { unique: true }
+);
+paymentSchema.index({ status: 1, dueDate: 1 });
+
+const Payment = mongoose.model("Payment", paymentSchema);
+
+export default Payment;
+=== User.js ===
+import mongoose from "mongoose";
+import bcrypt from "bcryptjs";
+
+const userSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      required: [true, "Name is required"],
+      trim: true,
+      minlength: 2,
+      maxlength: 80,
+    },
+    email: {
+      type: String,
+      required: [true, "Email is required"],
+      unique: true,
+      lowercase: true,
+      trim: true,
+      match: [/^\S+@\S+\.\S+$/, "Please enter a valid email"],
+    },
+    // Password hash kabhi API response mein nahi jata (select: false)
+    passwordHash: {
+      type: String,
+      required: true,
+      select: false,
+    },
+    role: {
+      type: String,
+      enum: ["admin", "resident"],
+      default: "resident",
+    },
+    phone: {
+      type: String,
+      trim: true,
+      maxlength: 20,
+    },
+    // Sirf residents ke liye
+    house: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "House",
+    },
+    approvalStatus: {
+      type: String,
+      enum: ["pending", "approved", "rejected"],
+      default: "pending",
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+  },
+  { timestamps: true }
+);
+
+// Ek house par sirf ek active resident account
+userSchema.index(
+  { house: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { house: { $type: "objectId" }, isActive: true },
+  }
+);
+
+// Password ka hash banane ka helper
+userSchema.statics.hashPassword = function (plainPassword) {
+  return bcrypt.hash(plainPassword, 12);
+};
+
+// Login par password check karne ka helper
+userSchema.methods.comparePassword = function (plainPassword) {
+  return bcrypt.compare(plainPassword, this.passwordHash);
+};
+
+const User = mongoose.model("User", userSchema);
+
+export default User;
+=== UtilityBill.js ===
+import mongoose from "mongoose";
+
+const auditLogSchema = new mongoose.Schema(
+  {
+    action: {
+      type: String,
+      enum: ["Uploaded", "Replaced", "Approved", "Rejected"],
+      required: true,
+    },
+    performedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    performedByName: { type: String, trim: true },
+    reason: { type: String, trim: true, maxlength: 500 },
+    timestamp: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
+const utilityBillSchema = new mongoose.Schema(
+  {
+    resident: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+      index: true,
+    },
+    house: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "House",
+      required: true,
+      index: true,
+    },
+    billType: {
+      type: String,
+      enum: ["Electricity", "Gas"],
+      required: true,
+    },
+    billingPeriod: {
+      type: String,
+      required: true,
+      match: [/^\d{4}-(0[1-9]|1[0-2])$/, "Period must be in YYYY-MM format"],
+    },
+    fileName: { type: String, required: true },
+    filePath: { type: String, required: true },
+    originalName: { type: String, required: true },
+    mimeType: { type: String, required: true },
+    size: { type: Number, required: true },
+    status: {
+      type: String,
+      enum: ["Pending Review", "Approved", "Rejected"],
+      default: "Pending Review",
+    },
+    rejectionReason: {
+      type: String,
+      trim: true,
+      maxlength: 500,
+    },
+    reviewedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+    reviewedAt: { type: Date },
+    auditLog: [auditLogSchema],
+  },
+  { timestamps: true }
+);
+
+utilityBillSchema.index(
+  { resident: 1, billType: 1, billingPeriod: 1 },
+  { unique: true }
+);
+utilityBillSchema.index({ status: 1, createdAt: -1 });
+
+const UtilityBill = mongoose.model("UtilityBill", utilityBillSchema);
+
+export default UtilityBill;
+=== Visitor.js ===
+import mongoose from "mongoose";
+
+const visitorSchema = new mongoose.Schema(
+  {
+    visitorName: {
+      type: String,
+      required: [true, "Visitor name is required"],
+      trim: true,
+      minlength: 2,
+      maxlength: 80,
+    },
+    purpose: { type: String, trim: true, maxlength: 200, default: "Visit" },
+    house: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "House",
+      required: [true, "House is required"],
+    },
+    phone: { type: String, trim: true, maxlength: 20 },
+    vehicleNumber: { type: String, trim: true, maxlength: 30 },
+    entryAt: { type: Date },
+    exitAt: { type: Date },
+    expectedArrival: { type: Date },
+    status: {
+      type: String,
+      enum: ["Pre-Registered", "Inside", "Exited"],
+      default: "Inside",
+    },
+    isPreRegistered: { type: Boolean, default: false },
+    preRegisteredBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+    recordedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+  },
+  { timestamps: true }
+);
+
+visitorSchema.index({ house: 1, entryAt: -1 });
+visitorSchema.index({ entryAt: -1 });
+visitorSchema.index({ status: 1, expectedArrival: -1 });
+
+const Visitor = mongoose.model("Visitor", visitorSchema);
+
+export default Visitor;
