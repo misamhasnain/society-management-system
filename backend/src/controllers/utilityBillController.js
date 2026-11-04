@@ -252,25 +252,47 @@ export const reviewUtilityBill = async (req, res) => {
       return fail(res, 400, "A clear rejection reason is required so the resident can correct it.");
     }
 
-    const bill = await UtilityBill.findById(req.params.id);
+    let bill = await UtilityBill.findById(req.params.id);
     if (!bill) {
       return fail(res, 404, "Utility bill record not found.");
     }
 
-    bill.status = status;
-    bill.reviewedBy = req.user._id;
-    bill.reviewedAt = new Date();
-    bill.rejectionReason = status === "Rejected" ? String(rejectionReason).trim() : undefined;
+    // A decision is final. The resident must upload a replacement to reopen review.
+    if (bill.status !== "Pending Review") {
+      return fail(
+        res,
+        409,
+        `This ${bill.billType} bill was already ${bill.status.toLowerCase()}. A decision cannot be changed; the resident must upload a replacement.`
+      );
+    }
 
-    bill.auditLog.push({
-      action: status,
-      performedBy: req.user._id,
-      performedByName: req.user.name,
-      reason: status === "Rejected" ? String(rejectionReason).trim() : "Approved by administrator",
-      timestamp: new Date(),
-    });
+    const now = new Date();
+    const reasonText = status === "Rejected" ? String(rejectionReason).trim() : "Approved by administrator";
+    const update = {
+      $set: { status, reviewedBy: req.user._id, reviewedAt: now },
+      $push: {
+        auditLog: {
+          action: status,
+          performedBy: req.user._id,
+          performedByName: req.user.name,
+          reason: reasonText,
+          timestamp: now,
+        },
+      },
+    };
+    if (status === "Rejected") update.$set.rejectionReason = reasonText;
+    else update.$unset = { rejectionReason: 1 };
 
-    await bill.save();
+    // Atomic: only succeeds if the bill is still pending (protects against double clicks / two admins)
+    const claimed = await UtilityBill.findOneAndUpdate(
+      { _id: bill._id, status: "Pending Review" },
+      update,
+      { new: true }
+    );
+    if (!claimed) {
+      return fail(res, 409, "This bill was just reviewed by someone else. Please refresh the list.");
+    }
+    bill = claimed;
 
     // Notify Resident
     try {

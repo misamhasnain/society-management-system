@@ -1,9 +1,21 @@
-﻿import "dotenv/config";
-import dns from "node:dns";
+﻿
+import "dotenv/config";
 import app from "./app.js";
 import connectDB from "./config/db.js";
+import "./models/House.js";
+import "./models/User.js";
+import "./models/Complaint.js";
+import "./models/Payment.js";
+import "./models/Notice.js";
+import "./models/Notification.js";
+import "./models/Visitor.js";
+import "./models/PaymentProof.js";
+import "./models/Receipt.js";
+import "./models/Counter.js";
+import dns from "node:dns";
 
-// Kuch routers SRV lookup reject karte hain, is liye Google DNS use karte hain
+
+
 dns.setServers(["8.8.8.8", "8.8.4.4"]);
 
 const PORT = process.env.PORT || 5000;

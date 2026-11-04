@@ -15,7 +15,7 @@ const notificationSchema = new mongoose.Schema(
     title: { type: String, required: true, trim: true, maxlength: 120 },
     message: { type: String, required: true, trim: true, maxlength: 500 },
     relatedResource: {
-      kind: { type: String, enum: ["complaint", "payment", "notice", "utility-bill", "visitor"] },
+      kind: { type: String, enum: ["complaint", "payment", "notice", "utility-bill", "visitor", "payment-proof", "receipt"] },
       id: { type: mongoose.Schema.Types.ObjectId },
     },
     isRead: { type: Boolean, default: false },

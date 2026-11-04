@@ -61,7 +61,12 @@ const utilityBillSchema = new mongoose.Schema(
     reviewedAt: { type: Date },
     auditLog: [auditLogSchema],
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    // Never expose the server's internal file path in API responses
+    toJSON: { transform: (doc, ret) => { delete ret.filePath; return ret; } },
+    toObject: { transform: (doc, ret) => { delete ret.filePath; return ret; } },
+  }
 );
 
 utilityBillSchema.index(

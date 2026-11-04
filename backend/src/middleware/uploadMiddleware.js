@@ -45,3 +45,44 @@ export const uploadBill = multer({
   },
   fileFilter,
 });
+
+// ---- Payment proof uploads (separate folder, same rules as bills) ----
+const proofDir = path.resolve(process.cwd(), "uploads", "proofs");
+if (!fs.existsSync(proofDir)) {
+  fs.mkdirSync(proofDir, { recursive: true });
+}
+
+const proofStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, proofDir),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, `${Date.now()}-${crypto.randomBytes(6).toString("hex")}${ext}`);
+  },
+});
+
+const uploadProof = multer({
+  storage: proofStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter,
+});
+
+// Wraps multer so upload problems return a clear 400 instead of a generic 500
+export const uploadProofFile = (req, res, next) => {
+  uploadProof.single("file")(req, res, (err) => {
+    if (!err) return next();
+    const message =
+      err.code === "LIMIT_FILE_SIZE" ? "File is too large. The maximum size is 5MB." : err.message;
+    return res.status(400).json({ success: false, message, errors: [] });
+  });
+};
+
+// Wraps the existing bill uploader so size / type problems return a clear 400 message
+export const uploadBillFile = (req, res, next) => {
+  uploadBill.single("file")(req, res, (err) => {
+    if (!err) return next();
+    let message = err.message;
+    if (err.code === "LIMIT_FILE_SIZE") message = "File is too large. The maximum size is 5MB.";
+    else if (err.code === "LIMIT_UNEXPECTED_FILE") message = "Unexpected upload field. Please attach a single bill file.";
+    return res.status(400).json({ success: false, message, errors: [] });
+  });
+};

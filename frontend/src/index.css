@@ -37,3 +37,27 @@ body {
 .toast-enter {
   animation: slideInRight 0.25s ease-out forwards;
 }
+
+/* Receipt printing: show only the receipt */
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+  #receipt-print,
+  #receipt-print * {
+    visibility: visible !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  #receipt-print {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    border: none;
+    border-radius: 0;
+  }
+  .no-print {
+    display: none !important;
+  }
+}
