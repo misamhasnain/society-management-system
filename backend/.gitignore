@@ -1,11 +1,11 @@
-﻿node_modules/
+node_modules/
 .env
 .env.*
 !.env.example
 npm-debug.log*
 .DS_Store
 cookies.txt
+rescookies.txt
+*cookies.txt
 scripts/adminLogin.json
-
-cookies.txt
-scripts/adminLogin.json
+uploads/

@@ -7,3 +7,5 @@ dist/
 cookies.txt
 rescookies.txt
 *cookies.txt
+uploads/
+backend/uploads/

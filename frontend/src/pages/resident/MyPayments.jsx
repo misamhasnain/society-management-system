@@ -1,15 +1,27 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import api from "../../api/axios";
 import Card from "../../components/ui/Card";
-import Badge, { StatusBadge } from "../../components/ui/Badge";
+import { StatusBadge } from "../../components/ui/Badge";
 import Button from "../../components/ui/Button";
 import LoadingSpinner from "../../components/ui/LoadingSpinner";
 import EmptyState from "../../components/ui/EmptyState";
 import Modal from "../../components/ui/Modal";
+import PaymentProofModal from "../../components/payments/PaymentProofModal";
+import ReceiptModal from "../../components/receipt/ReceiptModal";
+import { downloadReceiptPdf } from "../../utils/receipt";
 import { useToastContext } from "../../components/layout/DashboardLayout";
+
+// The API returns utility verification as a plain string ("Approved"), but older
+// code expected { status }. Support both so the ledger always shows the real status.
+const readStatus = (v) => (typeof v === "string" ? v : v?.status) || "Missing";
+
+const fmtShort = (d) => (d ? new Date(d).toLocaleDateString() : "—");
 
 export default function ResidentPayments() {
   const toast = useToastContext();
+  // Keep the latest toast in a ref so fetch callbacks stay stable (avoids refetch loops on every toast)
+  const toastRef = useRef(toast);
+  toastRef.current = toast;
 
   // Invoices state
   const [payments, setPayments] = useState([]);
@@ -33,36 +45,54 @@ export default function ResidentPayments() {
   const [previewDoc, setPreviewDoc] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
-  // Payment Confirmation Request Modal
+  // Legacy payment confirmation modal (kept for backward compatibility)
   const [requestPayModalPayment, setRequestPayModalPayment] = useState(null);
   const [paymentNote, setPaymentNote] = useState("");
   const [requestingPay, setRequestingPay] = useState(false);
 
+  // NEW: payment proof upload + receipt viewing
+  const [proofPayment, setProofPayment] = useState(null);
+  const [receiptView, setReceiptView] = useState(null);
+  const [downloadingId, setDownloadingId] = useState(null);
+
   // Fetch Invoices
-  const fetchPayments = useCallback(() => {
-    setLoading(true);
-    const params = new URLSearchParams({ limit: 50 });
-    if (statusFilter) params.set("status", statusFilter);
-    api
-      .get(`/payments?${params}`)
-      .then((r) => setPayments(r.data.data.payments || []))
-      .catch(() => toast?.error("Could not fetch invoices."))
-      .finally(() => setLoading(false));
-  }, [statusFilter, toast]);
+  // `silent` = background refresh (no spinner, no error toast)
+  const fetchPayments = useCallback(
+    (silent = false) => {
+      if (!silent) setLoading(true);
+      const params = new URLSearchParams({ limit: 50 });
+      if (statusFilter) params.set("status", statusFilter);
+      api
+        .get(`/payments?${params}`)
+        .then((r) => setPayments(r.data.data.payments || []))
+        .catch(() => {
+          if (!silent) toastRef.current?.error("Could not fetch invoices.");
+        })
+        .finally(() => {
+          if (!silent) setLoading(false);
+        });
+    },
+    [statusFilter]
+  );
 
   // Fetch Utility Bill Verification Status for selected period
-  const fetchVerificationStatus = useCallback(() => {
-    setVerificationLoading(true);
-    api
-      .get(`/utility-bills/status?billingPeriod=${selectedPeriod}`)
-      .then((r) => {
-        setVerificationData(r.data.data);
-      })
-      .catch((err) => {
-        toast?.error(err.response?.data?.message || "Failed to load utility bill status.");
-      })
-      .finally(() => setVerificationLoading(false));
-  }, [selectedPeriod, toast]);
+  const fetchVerificationStatus = useCallback(
+    (silent = false) => {
+      if (!silent) setVerificationLoading(true);
+      api
+        .get(`/utility-bills/status?billingPeriod=${selectedPeriod}`)
+        .then((r) => {
+          setVerificationData(r.data.data);
+        })
+        .catch((err) => {
+          if (!silent) toastRef.current?.error(err.response?.data?.message || "Failed to load utility bill status.");
+        })
+        .finally(() => {
+          if (!silent) setVerificationLoading(false);
+        });
+    },
+    [selectedPeriod]
+  );
 
   useEffect(() => {
     fetchPayments();
@@ -71,6 +101,24 @@ export default function ResidentPayments() {
   useEffect(() => {
     fetchVerificationStatus();
   }, [fetchVerificationStatus]);
+
+  // Auto-refresh so admin decisions (approved / rejected + reason) appear without a manual reload:
+  // every 30 seconds while the tab is visible, and immediately when the tab regains focus.
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState !== "visible") return;
+      fetchPayments(true);
+      fetchVerificationStatus(true);
+    };
+    const timer = setInterval(refresh, 30000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [fetchPayments, fetchVerificationStatus]);
 
   // Open upload modal for specific bill type
   const openUploadModal = (type) => {
@@ -166,7 +214,7 @@ export default function ResidentPayments() {
     setPreviewDoc(null);
   };
 
-  // Submit Payment Request (After bills verified)
+  // Legacy: submit payment request without proof (no longer triggered from the UI)
   const handleRequestPayment = async () => {
     if (!requestPayModalPayment) return;
     setRequestingPay(true);
@@ -185,6 +233,18 @@ export default function ResidentPayments() {
     }
   };
 
+  // NEW: quick PDF download from the ledger
+  const handleReceiptDownload = async (receipt) => {
+    setDownloadingId(receipt._id);
+    try {
+      await downloadReceiptPdf(receipt._id, receipt.receiptNumber);
+    } catch (e) {
+      toast?.error(e.message);
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
   const totalDues = payments
     .filter((p) => p.status === "Unpaid")
     .reduce((s, p) => s + (p.amount || 0), 0);
@@ -193,6 +253,90 @@ export default function ResidentPayments() {
   const gas = verificationData?.gas || { status: "Missing" };
   const isPeriodVerified = verificationData?.isVerified;
 
+  // ---- NEW: shared renderers used by both the table and the mobile cards ----
+
+  // Verification status of the payment proof the resident uploaded
+  const renderProofInfo = (p) => {
+    const proof = p.latestProof;
+    if (!proof) {
+      return p.status === "Paid" ? (
+        <span className="text-[11px] text-gray-400">Marked paid by admin</span>
+      ) : (
+        <span className="text-[11px] text-gray-400">Not submitted</span>
+      );
+    }
+    return (
+      <div className="space-y-1 max-w-[220px]">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <StatusBadge status={proof.status} />
+          <span className="text-[10px] text-gray-400">{fmtShort(proof.createdAt)}</span>
+        </div>
+        {proof.status === "Pending" && (
+          <p className="text-[10px] text-amber-700 font-medium">Waiting for admin verification</p>
+        )}
+        {proof.status === "Rejected" && (
+          <div className="p-2 bg-rose-50 border border-rose-200 rounded-lg text-[11px] text-rose-800">
+            <p className="font-bold">Rejected by admin</p>
+            <p className="italic mt-0.5 break-words">"{proof.rejectionReason || "No reason given"}"</p>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Action for an invoice: receipt actions, waiting state, upload, or locked
+  const renderPaymentAction = (p, billsReady) => {
+    const proofStatus = p.latestProof?.status;
+
+    if (p.status === "Paid") {
+      return (
+        <div className="flex flex-col items-end gap-1.5">
+          <span className="text-xs font-bold text-emerald-600">✓ Settled</span>
+          {p.receipt && (
+            <div className="flex flex-wrap justify-end gap-1.5">
+              <Button size="sm" variant="secondary" onClick={() => setReceiptView(p.receipt._id)}>
+                🧾 View
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                loading={downloadingId === p.receipt._id}
+                onClick={() => handleReceiptDownload(p.receipt)}
+              >
+                ⬇ PDF
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => setReceiptView(p.receipt._id)} title="Open the receipt, then press Print">
+                🖨 Print
+              </Button>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    if (proofStatus === "Pending" || p.paymentRequestSubmitted) {
+      return (
+        <span className="text-[11px] text-sky-600 font-bold bg-sky-50 px-2 py-1 rounded-lg border border-sky-200">
+          Awaiting Admin Review
+        </span>
+      );
+    }
+
+    if (billsReady) {
+      return (
+        <Button size="sm" variant={proofStatus === "Rejected" ? "danger" : "primary"} onClick={() => setProofPayment(p)}>
+          {proofStatus === "Rejected" ? "🔄 Upload Corrected Proof" : "📤 Upload Payment Proof"}
+        </Button>
+      );
+    }
+
+    return (
+      <span className="inline-block px-2.5 py-1 bg-amber-50 text-amber-800 rounded-lg text-[10px] font-bold border border-amber-200">
+        🔒 Bills Required
+      </span>
+    );
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -200,7 +344,7 @@ export default function ResidentPayments() {
         <div>
           <h1 className="text-2xl font-black text-gray-900 tracking-tight">Maintenance & Utility Bills</h1>
           <p className="text-xs text-gray-500 mt-1">
-            Upload your monthly Electricity & Gas bills for admin approval, and manage society maintenance dues.
+            Upload your monthly Electricity & Gas bills for admin approval, then submit proof of your maintenance payment to receive a receipt.
           </p>
         </div>
         <div className="p-3.5 rounded-2xl bg-white border border-gray-100 shadow-xs flex items-center gap-3">
@@ -216,7 +360,7 @@ export default function ResidentPayments() {
       <Card>
         <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-gray-100 gap-3">
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="text-lg">⚡</span>
               <h2 className="text-base font-bold text-gray-900">Utility Bill Verification Center</h2>
               {isPeriodVerified ? (
@@ -308,7 +452,7 @@ export default function ResidentPayments() {
               </div>
 
               {/* Action buttons */}
-              <div className="mt-4 pt-3 border-t border-gray-100/80 flex items-center justify-between gap-2">
+              <div className="mt-4 pt-3 border-t border-gray-100/80 flex flex-wrap items-center justify-between gap-2">
                 {elec.bill && (
                   <Button
                     size="sm"
@@ -392,7 +536,7 @@ export default function ResidentPayments() {
               </div>
 
               {/* Action buttons */}
-              <div className="mt-4 pt-3 border-t border-gray-100/80 flex items-center justify-between gap-2">
+              <div className="mt-4 pt-3 border-t border-gray-100/80 flex flex-wrap items-center justify-between gap-2">
                 {gas.bill && (
                   <Button
                     size="sm"
@@ -428,14 +572,14 @@ export default function ResidentPayments() {
           <div>
             <p className="font-bold">Maintenance Payment Policy:</p>
             <p className="text-indigo-800 text-[11px] mt-0.5">
-              Residents cannot submit maintenance settlement confirmation until both monthly utility bills are uploaded and marked as
-              <strong> Approved</strong> by society administration. This ensures all community utility quotas and records remain up-to-date.
+              Once both monthly utility bills are <strong>Approved</strong>, upload proof of your maintenance payment. When the admin approves it,
+              your invoice is marked Paid and a receipt is generated automatically.
             </p>
           </div>
         </div>
       </Card>
 
-      {/* SECTION 2: MAINTENANCE INVOICES TABLE */}
+      {/* SECTION 2: MAINTENANCE INVOICES / PAYMENT HISTORY */}
       <Card padding={false}>
         <div className="p-4 sm:p-5 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
@@ -463,99 +607,124 @@ export default function ResidentPayments() {
             <EmptyState icon="💳" title="No billing records" description="You have no maintenance invoices on record." />
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="border-b border-gray-100 bg-gray-50/60 text-gray-500 uppercase tracking-wider font-semibold text-[11px]">
-                  <th className="py-3.5 px-5">Invoice Description</th>
-                  <th className="py-3.5 px-4">Period</th>
-                  <th className="py-3.5 px-4">Amount</th>
-                  <th className="py-3.5 px-4">Due Date</th>
-                  <th className="py-3.5 px-4">Utility Verification</th>
-                  <th className="py-3.5 px-4">Status</th>
-                  <th className="py-3.5 px-5 text-right">Payment Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {payments.map((p) => {
-                  const elecStatus = p.billsVerification?.electricity?.status || "Missing";
-                  const gasStatus = p.billsVerification?.gas?.status || "Missing";
-                  const billsReady = elecStatus === "Approved" && gasStatus === "Approved";
+          <>
+            {/* Mobile cards */}
+            <div className="md:hidden divide-y divide-gray-100">
+              {payments.map((p) => {
+                const elecStatus = readStatus(p.billsVerification?.electricity);
+                const gasStatus = readStatus(p.billsVerification?.gas);
+                const billsReady = p.billsVerification?.verified ?? (elecStatus === "Approved" && gasStatus === "Approved");
 
-                  return (
-                    <tr key={p._id} className="hover:bg-gray-50/60 transition-colors">
-                      <td className="py-4 px-5">
-                        <p className="font-bold text-gray-900">{p.description}</p>
+                return (
+                  <div key={p._id} className="p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-bold text-gray-900">{p.description}</p>
+                        <p className="text-[11px] text-gray-500 font-mono">Period {p.paymentPeriod}</p>
                         {p.isOverdue && p.status === "Unpaid" && (
                           <span className="inline-block mt-1 px-2 py-0.5 bg-red-100 text-red-700 font-bold text-[10px] rounded-full border border-red-200">
                             ⚠️ Overdue ({p.daysOverdue} days)
                           </span>
                         )}
-                      </td>
-                      <td className="py-4 px-4 font-mono font-semibold text-gray-700">{p.paymentPeriod}</td>
-                      <td className="py-4 px-4 font-black text-gray-900 text-sm">
-                        PKR {Number(p.amount || 0).toLocaleString()}
-                      </td>
-                      <td className="py-4 px-4 text-gray-600 font-medium">
-                        {p.dueDate ? new Date(p.dueDate).toLocaleDateString() : "No date"}
-                      </td>
-                      <td className="py-4 px-4">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-1.5 text-[11px]">
-                            <span className="text-gray-400">⚡:</span>
-                            <StatusBadge status={elecStatus} />
-                          </div>
-                          <div className="flex items-center gap-1.5 text-[11px]">
-                            <span className="text-gray-400">🔥:</span>
-                            <StatusBadge status={gasStatus} />
-                          </div>
-                        </div>
-                      </td>
-                      <td className="py-4 px-4">
-                        <StatusBadge status={p.status} />
-                        {p.markedPaidAt && (
-                          <p className="text-[10px] text-gray-400 mt-1">
-                            Paid {new Date(p.markedPaidAt).toLocaleDateString()}
-                          </p>
-                        )}
-                        {p.paymentRequestSubmitted && p.status === "Unpaid" && (
-                          <p className="text-[10px] text-sky-700 font-semibold mt-1 bg-sky-50 p-1 rounded border border-sky-100">
-                            ⏳ Request submitted
-                          </p>
-                        )}
-                      </td>
-                      <td className="py-4 px-5 text-right">
-                        {p.status === "Paid" ? (
-                          <span className="text-xs font-bold text-emerald-600">✓ Settled</span>
-                        ) : p.paymentRequestSubmitted ? (
-                          <span className="text-[11px] text-sky-600 font-bold bg-sky-50 px-2 py-1 rounded-lg border border-sky-200">
-                            Awaiting Admin Review
-                          </span>
-                        ) : billsReady ? (
-                          <Button
-                            size="sm"
-                            variant="primary"
-                            onClick={() => {
-                              setRequestPayModalPayment(p);
-                              setPaymentNote("");
-                            }}
-                          >
-                            ✓ Confirm Payment
-                          </Button>
-                        ) : (
-                          <div className="text-right">
-                            <span className="inline-block px-2.5 py-1 bg-amber-50 text-amber-800 rounded-lg text-[10px] font-bold border border-amber-200">
-                              🔒 Bills Required
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="text-sm font-black text-gray-900">PKR {Number(p.amount || 0).toLocaleString()}</p>
+                        <StatusBadge status={p.status} className="mt-1" />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between text-[11px] text-gray-500">
+                      <span>Due: {p.dueDate ? new Date(p.dueDate).toLocaleDateString() : "No date"}</span>
+                      {p.markedPaidAt && <span>Paid {new Date(p.markedPaidAt).toLocaleDateString()}</span>}
+                    </div>
+
+                    <div className="flex items-center gap-3 text-[11px]">
+                      <span className="flex items-center gap-1">⚡ <StatusBadge status={elecStatus} /></span>
+                      <span className="flex items-center gap-1">🔥 <StatusBadge status={gasStatus} /></span>
+                    </div>
+
+                    <div>
+                      <p className="text-[10px] uppercase font-bold text-gray-400 mb-1">Payment proof</p>
+                      {renderProofInfo(p)}
+                    </div>
+
+                    <div className="pt-1 flex justify-end">{renderPaymentAction(p, billsReady)}</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Desktop table */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-gray-100 bg-gray-50/60 text-gray-500 uppercase tracking-wider font-semibold text-[11px]">
+                    <th className="py-3.5 px-5">Invoice Description</th>
+                    <th className="py-3.5 px-4">Period</th>
+                    <th className="py-3.5 px-4">Amount</th>
+                    <th className="py-3.5 px-4">Due Date</th>
+                    <th className="py-3.5 px-4">Utility Verification</th>
+                    <th className="py-3.5 px-4">Payment Proof</th>
+                    <th className="py-3.5 px-4">Status</th>
+                    <th className="py-3.5 px-5 text-right">Payment Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {payments.map((p) => {
+                    const elecStatus = readStatus(p.billsVerification?.electricity);
+                    const gasStatus = readStatus(p.billsVerification?.gas);
+                    const billsReady =
+                      p.billsVerification?.verified ?? (elecStatus === "Approved" && gasStatus === "Approved");
+
+                    return (
+                      <tr key={p._id} className="hover:bg-gray-50/60 transition-colors align-top">
+                        <td className="py-4 px-5">
+                          <p className="font-bold text-gray-900">{p.description}</p>
+                          {p.isOverdue && p.status === "Unpaid" && (
+                            <span className="inline-block mt-1 px-2 py-0.5 bg-red-100 text-red-700 font-bold text-[10px] rounded-full border border-red-200">
+                              ⚠️ Overdue ({p.daysOverdue} days)
                             </span>
+                          )}
+                        </td>
+                        <td className="py-4 px-4 font-mono font-semibold text-gray-700">{p.paymentPeriod}</td>
+                        <td className="py-4 px-4 font-black text-gray-900 text-sm">
+                          PKR {Number(p.amount || 0).toLocaleString()}
+                        </td>
+                        <td className="py-4 px-4 text-gray-600 font-medium">
+                          {p.dueDate ? new Date(p.dueDate).toLocaleDateString() : "No date"}
+                        </td>
+                        <td className="py-4 px-4">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-1.5 text-[11px]">
+                              <span className="text-gray-400">⚡:</span>
+                              <StatusBadge status={elecStatus} />
+                            </div>
+                            <div className="flex items-center gap-1.5 text-[11px]">
+                              <span className="text-gray-400">🔥:</span>
+                              <StatusBadge status={gasStatus} />
+                            </div>
                           </div>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                        </td>
+                        <td className="py-4 px-4">{renderProofInfo(p)}</td>
+                        <td className="py-4 px-4">
+                          <StatusBadge status={p.status} />
+                          {p.markedPaidAt && (
+                            <p className="text-[10px] text-gray-400 mt-1">
+                              Paid {new Date(p.markedPaidAt).toLocaleDateString()}
+                            </p>
+                          )}
+                          {p.receipt && (
+                            <p className="text-[10px] text-gray-500 font-mono mt-1">{p.receipt.receiptNumber}</p>
+                          )}
+                        </td>
+                        <td className="py-4 px-5 text-right">{renderPaymentAction(p, billsReady)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </Card>
 
@@ -651,9 +820,9 @@ export default function ResidentPayments() {
         title={`Uploaded ${previewDoc?.bill?.billType || "Bill"} (${previewDoc?.bill?.billingPeriod || ""})`}
       >
         <div className="space-y-4">
-          <div className="p-3 bg-gray-50 rounded-xl text-xs flex items-center justify-between">
-            <div>
-              <p className="font-bold text-gray-900">{previewDoc?.originalName}</p>
+          <div className="p-3 bg-gray-50 rounded-xl text-xs flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="font-bold text-gray-900 truncate">{previewDoc?.originalName}</p>
               <p className="text-gray-500 text-[11px]">
                 Status: <span className="font-semibold">{previewDoc?.bill?.status}</span>
               </p>
@@ -662,7 +831,7 @@ export default function ResidentPayments() {
               <a
                 href={previewDoc.url}
                 download={previewDoc.originalName}
-                className="px-3 py-1.5 bg-indigo-50 text-indigo-700 font-bold rounded-lg hover:bg-indigo-100 transition-colors"
+                className="px-3 py-1.5 bg-indigo-50 text-indigo-700 font-bold rounded-lg hover:bg-indigo-100 transition-colors shrink-0"
               >
                 💾 Download
               </a>
@@ -680,14 +849,14 @@ export default function ResidentPayments() {
               <img
                 src={previewDoc?.url}
                 alt="Utility Bill Document"
-                className="max-h-[500px] w-auto object-contain mx-auto"
+                className="max-h-[500px] w-auto max-w-full object-contain mx-auto"
               />
             )}
           </div>
         </div>
       </Modal>
 
-      {/* MODAL 3: CONFIRM PAYMENT SETTLEMENT REQUEST */}
+      {/* MODAL 3: LEGACY PAYMENT CONFIRMATION (kept; no longer opened from the ledger) */}
       <Modal
         isOpen={Boolean(requestPayModalPayment)}
         onClose={() => setRequestPayModalPayment(null)}
@@ -745,6 +914,19 @@ export default function ResidentPayments() {
           </div>
         </div>
       </Modal>
+
+      {/* NEW MODAL 4: UPLOAD MAINTENANCE PAYMENT PROOF */}
+      <PaymentProofModal
+        payment={proofPayment}
+        onClose={() => setProofPayment(null)}
+        onSuccess={() => {
+          setProofPayment(null);
+          fetchPayments();
+        }}
+      />
+
+      {/* NEW MODAL 5: VIEW / PRINT / DOWNLOAD RECEIPT */}
+      <ReceiptModal receiptId={receiptView} onClose={() => setReceiptView(null)} />
     </div>
   );
 }

@@ -3,6 +3,9 @@ import Payment from "../models/Payment.js";
 import User from "../models/User.js";
 import Notification from "../models/Notification.js";
 import UtilityBill from "../models/UtilityBill.js";
+import PaymentProof from "../models/PaymentProof.js";
+import Receipt from "../models/Receipt.js";
+import { ensureReceipt, voidReceipt, notifyReceiptIssued } from "../services/receiptService.js";
 
 const ok = (res, status, message, data = {}) =>
   res.status(status).json({ success: true, message, data });
@@ -63,6 +66,20 @@ export const getPayments = async (req, res) => {
       billMap.set(key, b);
     });
 
+    // Attach receipt + latest payment-proof info (used by payment history UI)
+    const paymentIds = rawPayments.map((p) => p._id);
+    const [receipts, proofs] = await Promise.all([
+      Receipt.find({ payment: { $in: paymentIds } }).select("receiptNumber payment status"),
+      PaymentProof.find({ payment: { $in: paymentIds } })
+        .sort({ createdAt: -1 })
+        .select("payment status rejectionReason paymentDate createdAt reviewedAt"),
+    ]);
+    const receiptMap = new Map(receipts.map((r) => [String(r.payment), r]));
+    const proofMap = new Map();
+    proofs.forEach((pr) => {
+      if (!proofMap.has(String(pr.payment))) proofMap.set(String(pr.payment), pr);
+    });
+
     const now = new Date();
 
     const payments = rawPayments.map((p) => {
@@ -88,6 +105,10 @@ export const getPayments = async (req, res) => {
         electricityReason: elec?.rejectionReason,
         gasReason: gas?.rejectionReason,
       };
+
+      const rc = receiptMap.get(String(p._id));
+      doc.receipt = rc && rc.status === "Paid" ? { _id: rc._id, receiptNumber: rc.receiptNumber } : null;
+      doc.latestProof = proofMap.get(String(p._id)) || null;
 
       doc.isOverdue = isOverdue;
       doc.daysOverdue = daysOverdue;
@@ -309,6 +330,18 @@ export const updatePaymentStatus = async (req, res) => {
       payment.markedPaidBy = undefined;
     }
     await payment.save();
+
+    // Keep receipts in sync when an admin marks a payment manually
+    try {
+      if (status === "Paid") {
+        const { receipt, created } = await ensureReceipt({ payment, approvedBy: req.user });
+        if (created) await notifyReceiptIssued(receipt);
+      } else {
+        await voidReceipt(payment._id);
+      }
+    } catch (e) {
+      console.error("Receipt sync error:", e.message);
+    }
 
     await Notification.create({
       recipient: payment.resident,

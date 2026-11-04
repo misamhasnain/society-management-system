@@ -1,23 +1,8 @@
-﻿import multer from "multer";
-import path from "node:path";
-import fs from "node:fs";
-import crypto from "node:crypto";
+import multer from "multer";
 
-const uploadDir = path.resolve(process.cwd(), "uploads", "bills");
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    const unique = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}${ext}`;
-    cb(null, unique);
-  },
-});
+// Use memory storage everywhere — avoids ENOENT on Vercel's read-only filesystem.
+// The actual file persistence (Blob or local) happens in the controller via blobUpload.js.
+const storage = multer.memoryStorage();
 
 const ALLOWED_MIMES = [
   "image/jpeg",
@@ -38,10 +23,25 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
-export const uploadBill = multer({
-  storage,
-  limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB max
-  },
-  fileFilter,
-});
+const uploadBill = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 }, fileFilter });
+const uploadProof = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 }, fileFilter });
+
+// Wraps multer so upload problems return a clear 400 instead of a generic 500
+export const uploadBillFile = (req, res, next) => {
+  uploadBill.single("file")(req, res, (err) => {
+    if (!err) return next();
+    let message = err.message;
+    if (err.code === "LIMIT_FILE_SIZE") message = "File is too large. The maximum size is 5MB.";
+    else if (err.code === "LIMIT_UNEXPECTED_FILE") message = "Unexpected upload field. Please attach a single bill file.";
+    return res.status(400).json({ success: false, message, errors: [] });
+  });
+};
+
+export const uploadProofFile = (req, res, next) => {
+  uploadProof.single("file")(req, res, (err) => {
+    if (!err) return next();
+    const message =
+      err.code === "LIMIT_FILE_SIZE" ? "File is too large. The maximum size is 5MB." : err.message;
+    return res.status(400).json({ success: false, message, errors: [] });
+  });
+};

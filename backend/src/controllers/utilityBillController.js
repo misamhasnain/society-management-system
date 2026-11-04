@@ -1,9 +1,14 @@
-﻿import mongoose from "mongoose";
+import mongoose from "mongoose";
 import path from "node:path";
 import fs from "node:fs";
 import UtilityBill from "../models/UtilityBill.js";
 import User from "../models/User.js";
 import Notification from "../models/Notification.js";
+import {
+  uploadToBlob,
+  streamBlob,
+  deleteFromStorage,
+} from "../services/blobUpload.js";
 
 const ok = (res, status, message, data = {}) =>
   res.status(status).json({ success: true, message, data });
@@ -16,6 +21,7 @@ const BILL_TYPES = ["Electricity", "Gas"];
 
 // Resident: Upload or Replace Utility Bill
 export const uploadUtilityBill = async (req, res) => {
+  let uploadInfo = null;
   try {
     if (req.user.role !== "resident") {
       return fail(res, 403, "Only residents can upload utility bills.");
@@ -39,70 +45,86 @@ export const uploadUtilityBill = async (req, res) => {
       return fail(res, 400, "Bill document file (Image or PDF) is required.");
     }
 
-    // Check existing bill
-    let bill = await UtilityBill.findOne({
+    // Check existing bill before uploading
+    let existingBill = await UtilityBill.findOne({
       resident: req.user._id,
       billType,
       billingPeriod,
     });
 
-    if (bill && bill.status === "Approved") {
-      // Remove newly uploaded file since not needed
-      if (fs.existsSync(req.file.path)) {
-        try { fs.unlinkSync(req.file.path); } catch {}
-      }
+    if (existingBill && existingBill.status === "Approved") {
       return fail(res, 400, `Your ${billType} bill for ${billingPeriod} is already approved.`);
     }
 
-    if (bill) {
-      // Replace existing file on disk
-      if (bill.filePath && fs.existsSync(bill.filePath)) {
-        try { fs.unlinkSync(bill.filePath); } catch {}
+    // Upload to Blob or local dev fallback
+    uploadInfo = await uploadToBlob(req.file.buffer, req.file.originalname, req.file.mimetype);
+
+    let savedBill;
+    let oldStorage = null;
+
+    try {
+      if (existingBill) {
+        // Track old file reference for post-save cleanup
+        oldStorage = {
+          provider: existingBill.storageProvider || "local",
+          filePath: existingBill.filePath,
+        };
+
+        existingBill.fileName = uploadInfo.fileName;
+        existingBill.filePath = uploadInfo.filePath;
+        existingBill.storageProvider = uploadInfo.storageProvider;
+        existingBill.originalName = req.file.originalname;
+        existingBill.mimeType = req.file.mimetype;
+        existingBill.size = req.file.size;
+        existingBill.status = "Pending Review";
+        existingBill.rejectionReason = undefined;
+        existingBill.reviewedBy = undefined;
+        existingBill.reviewedAt = undefined;
+        existingBill.auditLog.push({
+          action: "Replaced",
+          performedBy: req.user._id,
+          performedByName: req.user.name,
+          reason: "Resident uploaded a replacement document.",
+          timestamp: new Date(),
+        });
+
+        savedBill = await existingBill.save();
+      } else {
+        savedBill = await UtilityBill.create({
+          resident: req.user._id,
+          house: req.user.house,
+          billType,
+          billingPeriod,
+          fileName: uploadInfo.fileName,
+          filePath: uploadInfo.filePath,
+          storageProvider: uploadInfo.storageProvider,
+          originalName: req.file.originalname,
+          mimeType: req.file.mimetype,
+          size: req.file.size,
+          status: "Pending Review",
+          auditLog: [
+            {
+              action: "Uploaded",
+              performedBy: req.user._id,
+              performedByName: req.user.name,
+              reason: "Initial bill submission",
+              timestamp: new Date(),
+            },
+          ],
+        });
       }
-
-      bill.fileName = req.file.filename;
-      bill.filePath = req.file.path;
-      bill.originalName = req.file.originalname;
-      bill.mimeType = req.file.mimetype;
-      bill.size = req.file.size;
-      bill.status = "Pending Review";
-      bill.rejectionReason = undefined;
-      bill.reviewedBy = undefined;
-      bill.reviewedAt = undefined;
-      bill.auditLog.push({
-        action: "Replaced",
-        performedBy: req.user._id,
-        performedByName: req.user.name,
-        reason: "Resident uploaded a replacement document.",
-        timestamp: new Date(),
-      });
-
-      await bill.save();
-    } else {
-      bill = await UtilityBill.create({
-        resident: req.user._id,
-        house: req.user.house,
-        billType,
-        billingPeriod,
-        fileName: req.file.filename,
-        filePath: req.file.path,
-        originalName: req.file.originalname,
-        mimeType: req.file.mimetype,
-        size: req.file.size,
-        status: "Pending Review",
-        auditLog: [
-          {
-            action: "Uploaded",
-            performedBy: req.user._id,
-            performedByName: req.user.name,
-            reason: "Initial bill submission",
-            timestamp: new Date(),
-          },
-        ],
-      });
+    } catch (dbErr) {
+      // Rollback newly uploaded file if DB save failed
+      await deleteFromStorage(uploadInfo.storageProvider, uploadInfo.filePath);
+      throw dbErr;
     }
 
-    // Notify admins about pending bill
+    // DB save succeeded: delete previous file/blob if replacing
+    if (oldStorage) {
+      await deleteFromStorage(oldStorage.provider, oldStorage.filePath);
+    }
+
+    // Notify admins about pending bill (failures in notification do NOT rollback the saved bill)
     try {
       const admins = await User.find({ role: "admin", isActive: true }).select("_id");
       if (admins.length > 0) {
@@ -112,7 +134,7 @@ export const uploadUtilityBill = async (req, res) => {
             type: "utility-bill",
             title: "New Utility Bill Uploaded",
             message: `${req.user.name} submitted a ${billType} bill for ${billingPeriod} awaiting review.`,
-            relatedResource: { kind: "utility-bill", id: bill._id },
+            relatedResource: { kind: "utility-bill", id: savedBill._id },
           }))
         );
       }
@@ -120,7 +142,7 @@ export const uploadUtilityBill = async (req, res) => {
       console.error("Admin notification error:", e.message);
     }
 
-    const populated = await UtilityBill.findById(bill._id)
+    const populated = await UtilityBill.findById(savedBill._id)
       .populate("resident", "name email phone")
       .populate("house", "block houseNumber");
 
@@ -129,9 +151,6 @@ export const uploadUtilityBill = async (req, res) => {
     });
   } catch (err) {
     console.error("Upload error:", err);
-    if (req.file?.path && fs.existsSync(req.file.path)) {
-      try { fs.unlinkSync(req.file.path); } catch {}
-    }
     return fail(res, 500, "Failed to upload utility bill.", [err.message]);
   }
 };
@@ -252,25 +271,47 @@ export const reviewUtilityBill = async (req, res) => {
       return fail(res, 400, "A clear rejection reason is required so the resident can correct it.");
     }
 
-    const bill = await UtilityBill.findById(req.params.id);
+    let bill = await UtilityBill.findById(req.params.id);
     if (!bill) {
       return fail(res, 404, "Utility bill record not found.");
     }
 
-    bill.status = status;
-    bill.reviewedBy = req.user._id;
-    bill.reviewedAt = new Date();
-    bill.rejectionReason = status === "Rejected" ? String(rejectionReason).trim() : undefined;
+    // A decision is final. The resident must upload a replacement to reopen review.
+    if (bill.status !== "Pending Review") {
+      return fail(
+        res,
+        409,
+        `This ${bill.billType} bill was already ${bill.status.toLowerCase()}. A decision cannot be changed; the resident must upload a replacement.`
+      );
+    }
 
-    bill.auditLog.push({
-      action: status,
-      performedBy: req.user._id,
-      performedByName: req.user.name,
-      reason: status === "Rejected" ? String(rejectionReason).trim() : "Approved by administrator",
-      timestamp: new Date(),
-    });
+    const now = new Date();
+    const reasonText = status === "Rejected" ? String(rejectionReason).trim() : "Approved by administrator";
+    const update = {
+      $set: { status, reviewedBy: req.user._id, reviewedAt: now },
+      $push: {
+        auditLog: {
+          action: status,
+          performedBy: req.user._id,
+          performedByName: req.user.name,
+          reason: reasonText,
+          timestamp: now,
+        },
+      },
+    };
+    if (status === "Rejected") update.$set.rejectionReason = reasonText;
+    else update.$unset = { rejectionReason: 1 };
 
-    await bill.save();
+    // Atomic: only succeeds if the bill is still pending
+    const claimed = await UtilityBill.findOneAndUpdate(
+      { _id: bill._id, status: "Pending Review" },
+      update,
+      { new: true }
+    );
+    if (!claimed) {
+      return fail(res, 409, "This bill was just reviewed by someone else. Please refresh the list.");
+    }
+    bill = claimed;
 
     // Notify Resident
     try {
@@ -315,10 +356,38 @@ export const getBillFile = async (req, res) => {
     }
 
     // Security check: Only Admins or the Resident who owns this bill
-    if (req.user.role === "resident" && String(bill.resident) !== String(req.user._id)) {
-      return fail(res, 403, "Access denied. You can only view your own bills.");
+    if (req.user.role === "admin") {
+      // Allowed
+    } else if (req.user.role === "resident") {
+      if (String(bill.resident) !== String(req.user._id)) {
+        return fail(res, 403, "Access denied. You can only view your own bills.");
+      }
+    } else {
+      return fail(res, 403, "Access denied.");
     }
 
+    // Private Vercel Blob retrieval
+    if (bill.storageProvider === "vercel-blob") {
+      try {
+        res.setHeader("Content-Type", bill.mimeType || "application/octet-stream");
+        res.setHeader(
+          "Content-Disposition",
+          `inline; filename="${encodeURIComponent(bill.originalName)}"`
+        );
+        const streamed = await streamBlob(bill.filePath, res);
+        if (!streamed) {
+          if (!res.headersSent) res.removeHeader("Content-Disposition");
+          return fail(res, 404, "Bill file not found in storage.");
+        }
+        return;
+      } catch (err) {
+        console.error("Failed to stream private blob:", err);
+        if (!res.headersSent) res.removeHeader("Content-Disposition");
+        return fail(res, 404, "Bill file not found in storage.");
+      }
+    }
+
+    // Local file retrieval
     if (!bill.filePath || !fs.existsSync(bill.filePath)) {
       return fail(res, 404, "Bill file not found on server.");
     }

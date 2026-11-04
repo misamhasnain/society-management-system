@@ -1,4 +1,4 @@
-﻿import mongoose from "mongoose";
+import mongoose from "mongoose";
 
 const auditLogSchema = new mongoose.Schema(
   {
@@ -44,6 +44,11 @@ const utilityBillSchema = new mongoose.Schema(
     originalName: { type: String, required: true },
     mimeType: { type: String, required: true },
     size: { type: Number, required: true },
+    storageProvider: {
+      type: String,
+      enum: ["local", "vercel-blob"],
+      default: "local",
+    },
     status: {
       type: String,
       enum: ["Pending Review", "Approved", "Rejected"],
@@ -61,7 +66,12 @@ const utilityBillSchema = new mongoose.Schema(
     reviewedAt: { type: Date },
     auditLog: [auditLogSchema],
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    // Never expose the server's internal file path in API responses
+    toJSON: { transform: (doc, ret) => { delete ret.filePath; return ret; } },
+    toObject: { transform: (doc, ret) => { delete ret.filePath; return ret; } },
+  }
 );
 
 utilityBillSchema.index(

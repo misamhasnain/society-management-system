@@ -14,6 +14,8 @@ const AdminResidents = lazy(() => import("./pages/admin/Residents"));
 const AdminHouses = lazy(() => import("./pages/admin/Houses"));
 const AdminComplaints = lazy(() => import("./pages/admin/Complaints"));
 const AdminPayments = lazy(() => import("./pages/admin/Payments"));
+const AdminPaymentProofs = lazy(() => import("./pages/admin/PaymentProofs"));
+const AdminUtilityBills = lazy(() => import("./pages/admin/UtilityBills"));
 const AdminNotices = lazy(() => import("./pages/admin/Notices"));
 const AdminVisitors = lazy(() => import("./pages/admin/Visitors"));
 const AdminReports = lazy(() => import("./pages/admin/Reports"));
@@ -23,6 +25,7 @@ const AdminAIAssistant = lazy(() => import("./pages/admin/AIAssistant"));
 const ResidentDashboard = lazy(() => import("./pages/resident/Dashboard"));
 const ResidentComplaints = lazy(() => import("./pages/resident/MyComplaints"));
 const ResidentPayments = lazy(() => import("./pages/resident/MyPayments"));
+const ResidentReceipts = lazy(() => import("./pages/resident/MyReceipts"));
 const ResidentNoticeBoard = lazy(() => import("./pages/resident/NoticeBoard"));
 const ResidentVisitors = lazy(() => import("./pages/resident/MyVisitors"));
 const ResidentAIAssistant = lazy(() => import("./pages/resident/AIAssistant"));
@@ -185,6 +188,28 @@ export default function App() {
               }
             />
 
+            <Route
+              path="/admin/payment-proofs"
+              element={
+                <ProtectedRoute allowedRole="admin">
+                  <LayoutWrapper>
+                    <AdminPaymentProofs />
+                  </LayoutWrapper>
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="/admin/utility-bills"
+              element={
+                <ProtectedRoute allowedRole="admin">
+                  <LayoutWrapper>
+                    <AdminUtilityBills />
+                  </LayoutWrapper>
+                </ProtectedRoute>
+              }
+            />
+
             {/* Resident Routes */}
             <Route
               path="/resident/dashboard"
@@ -242,6 +267,17 @@ export default function App() {
                 <ProtectedRoute allowedRole="resident">
                   <LayoutWrapper>
                     <ResidentAIAssistant />
+                  </LayoutWrapper>
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="/resident/receipts"
+              element={
+                <ProtectedRoute allowedRole="resident">
+                  <LayoutWrapper>
+                    <ResidentReceipts />
                   </LayoutWrapper>
                 </ProtectedRoute>
               }

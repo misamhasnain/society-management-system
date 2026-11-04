@@ -16,3 +16,6 @@ const connectDB = async () => {
 };
 
 export default connectDB;
+
+
+let kdkd = process.env.MONGODB_URI

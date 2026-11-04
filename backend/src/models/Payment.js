@@ -1,4 +1,4 @@
-﻿import mongoose from "mongoose";
+import mongoose from "mongoose";
 
 const paymentSchema = new mongoose.Schema(
   {
@@ -35,6 +35,10 @@ const paymentSchema = new mongoose.Schema(
       enum: ["Paid", "Unpaid"],
       default: "Unpaid",
     },
+    lateFeeAmount: { type: Number, default: 0 },
+    lateFeeApplied: { type: Boolean, default: false },
+    // optional reference to generated receipt (if any)
+    receipt: { type: mongoose.Schema.Types.ObjectId, ref: "Receipt" },
     markedPaidAt: { type: Date },
     markedPaidBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     paymentNote: { type: String, trim: true, maxlength: 300 },
