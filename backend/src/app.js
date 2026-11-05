@@ -1,6 +1,7 @@
 ﻿import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
+import connectDB from "./config/db.js";
 import authRoutes from "./routes/authRoutes.js";
 import houseRoutes from "./routes/houseRoutes.js";
 import residentRoutes from "./routes/residentRoutes.js";
@@ -17,6 +18,8 @@ import receiptRoutes from "./routes/receiptRoutes.js";
 import { notFound, errorHandler } from "./middleware/errorMiddleware.js";
 
 const app = express();
+
+app.set("trust proxy", 1);
 
 app.use(
   cors({
@@ -37,6 +40,15 @@ app.get("/api/health", (req, res) => {
       timestamp: new Date().toISOString(),
     },
   });
+});
+
+app.use(async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (err) {
+    next(err);
+  }
 });
 
 app.use("/api/auth", authRoutes);
